@@ -11,9 +11,6 @@ output: html_document:
     toc_depth: 6
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 
 ## R Markdown
 
@@ -47,7 +44,7 @@ rstan::rstan_options(javascript=FALSE)
 **Part 1 - sea urchin temporal dynamics**
 #First look at the time series data to provide estimate for breakpoint
 ```{r}
-df<- read.csv("den_year.csv")
+df<- read.csv("data/den_year.csv")
 df
 
 p <- ggplot(df, aes(x = year, y = den)) + geom_line()
@@ -115,7 +112,7 @@ density.after <- df %>%
 
 #explore size frequency distribution
 ```{r}
-size_fq<- read.csv("size_year.csv")
+size_fq<- read.csv("data/size_year.csv")
 
 
 df2 <- size_fq %>%
@@ -200,7 +197,7 @@ ggplot(dat, aes(x = KSD, group = group, color = group))+
 # Sig = .05*sqrt(141)/1.96
 # gives SD of growth increment of .575 cm as 0.3 cm (~ CV of 0.3/.525 = 0.57)
 ```{r}
-DatU.raw <- read.csv('size_year.csv')
+DatU.raw <- read.csv('data/size_year.csv')
 
 FrequencyTable <- DatU.raw
 DatU <- expand.dft(FrequencyTable, freq="count")
@@ -291,8 +288,8 @@ print(growth_matrix)
 **Process Model**
 #Load Data
 ```{r}
-dat = read.csv("size_year.csv")
-dat2 = read.csv("den_year.csv")
+dat = read.csv("data/size_year.csv")
+dat2 = read.csv("data/den_year.csv")
 saveresults = 0
 loadresults = 1
 ```
