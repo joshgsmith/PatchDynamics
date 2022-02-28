@@ -1,0 +1,880 @@
+---
+title: "Smith and Tinker 2022"
+author: "Joshua G. Smith; M. Tim Tinker"
+date: "2/28/2022"
+output: html_document
+output: html_document:
+  toc:yes
+  pdf_document:
+    highlight: tango
+    toc: yes
+    toc_depth: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+**Required Packages**
+```{r load_libraries, message=FALSE}
+require(dplyr)
+require(segmented)
+require(mcp)
+require(MASS)
+require(cowplot)
+require(plyr)
+require(vcdExtra)
+require(reshape2)
+require(ggplot2)
+require(readxl)
+require(gtools)
+require(parallel)
+require(fitdistrplus)
+require(stats)
+require(bayesplot)
+require(gridExtra)
+require(cowplot)
+require(htmlTable)
+require(loo)
+require(cmdstanr)
+require(posterior)
+rstan::rstan_options(javascript=FALSE)
+```
+**Part 1 - sea urchin temporal dynamics**
+#First look at the time series data to provide estimate for breakpoint
+```{r}
+df<- read.csv("den_year.csv")
+df
+
+p <- ggplot(df, aes(x = year, y = den)) + geom_line()
+p
+
+p <- p + labs(x = "year",
+              y = "counts")
+p
+
+```
+
+#breakpoint estimated at 2013. 
+```{r}
+df.new <- df%>%
+  subset(year<2018) #Subset data before 2016 to narrow in exact timing
+my.lm.urchin <- lm(den ~ year, data = df.new)
+
+my.seg.urchin <- segmented(my.lm.urchin, 
+                           seg.Z = ~ year,
+                           psi = 2013)
+# display the summary
+summary(my.seg.urchin)
+
+# get the breakpoints
+my.seg.urchin$psi #actual breakpoint at 2014
+
+```
+
+#confirm 2014 breakpoint using mcp package
+```{r}
+model = list(
+  den ~ 1 + year,        #segmented 1: Intercept and Slope
+  ~ 0 + year + sigma (1))   #Segement 2: Joined slope (no intercept change)    
+
+fit = mcp(model, df, prior = list(cp_1 = 2014))
+
+plot(fit, q_fit = TRUE, cp_dens = FALSE, lines=50)  #plot 95% CI
+
+
+plot(fit, q_fit = c(0.5), cp_dens = FALSE, lines=50) + theme_bw() + theme(axis.line = element_line(colour = "black"),
+                                                                          panel.grid.major = element_blank(),
+                                                                          panel.grid.minor = element_blank(),
+                                                                          panel.border = element_blank(),
+                                                                          panel.background = element_blank(),
+                                                                          axis.text.x=element_text(size=12, color="black"),
+                                                                          axis.text.y=element_text(size=12, color="black"),
+                                                                          axis.title.x=element_text(size=14),
+                                                                          axis.title.y=element_text(size=14))+
+  
+  xlab("year")+
+  ylab("total counts of purple  sea urchins")+
+  scale_y_continuous(breaks = seq(0,2000, by=200), lim=c(0,2000))
+```
+
+#density pre and post outbreak
+```{r}
+density.prior <- df %>%
+  subset(year<2014)
+  mean(density.prior$den)
+  
+density.after <- df %>%
+  subset(year>2014)
+  mean(density.after$den)
+```
+
+#explore size frequency distribution
+```{r}
+size_fq<- read.csv("size_year.csv")
+
+
+df2 <- size_fq %>%
+  group_by(year)%>%
+  subset(year<=2016) %>%
+  dplyr::summarize(Int = weighted.mean(size,count))
+
+size_fq %>%
+  subset(year<=2016) %>%
+  ggplot(aes(x=factor(size), y=count))+
+  geom_bar(stat='identity')+
+  geom_vline(data = df2, aes(xintercept = Int), linetype="dashed", size=0.7)+
+  facet_wrap(~year, ncol=1)+
+  scale_y_continuous(trans='log10')+
+  xlab("size (cm)")+
+  ylab("no. of purple sea urchins")+
+  theme_bw()+
+  theme(text=element_text(size=20),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+  )
+
+```
+
+#K-S test of equivalency in the size distribution between 2013 and 2014
+
+```{r}
+sample_2013 <- size_fq %>%
+  filter(year == c('2013'))
+  sample_2013$year <- as.factor(sample_2013$year)
+sample_2014 <- size_fq %>%
+  filter(year == c('2014'))
+  sample_2014$year <- as.factor(sample_2014$year)
+
+
+KS_2013.prep <- expand.dft(sample_2013, freq="count")
+KS_2014.prep <- expand.dft(sample_2014, freq="count")
+
+KS_2013 <- as.vector(KS_2013.prep$size)
+KS_2014 <- as.vector(KS_2014.prep$size)
+
+
+ks.test(KS_2013,KS_2014, alternative="two.sided")
+ks.test(KS_2013,KS_2014, alternative="less")
+ks.test(KS_2013,KS_2014, alternative="greater")
+
+group <- c(rep("dist_2013", length(KS_2013)), rep("dist_2014", length(KS_2014)))
+dat <- data.frame(KSD = c(KS_2013,KS_2014), group=group)
+
+cdf1 <- ecdf(KS_2013)
+cdf2 <- ecdf(KS_2014)
+
+minMax <- seq(min(KS_2013, KS_2014), max(KS_2013, KS_2014), length.out=length(KS_2013)) 
+x0 <- minMax[which( abs(cdf1(minMax) - cdf2(minMax)) == max(abs(cdf1(minMax) - cdf2(minMax))) )] 
+y0 <- cdf1(x0) 
+y1 <- cdf2(x0) 
+
+ggplot(dat, aes(x = KSD, group = group, color = group))+
+  stat_ecdf(size=1) +
+  theme_bw(base_size = 28) +
+  theme(legend.position ="top") +
+  xlab("Sample") +
+  ylab("ECDF") +
+  #geom_line(size=1) +
+  geom_segment(aes(x = x0[1], y = y0[1], xend = x0[1], yend = y1[1]),
+               linetype = "dashed", color = "red") +
+  geom_point(aes(x = x0[1] , y= y0[1]), color="red", size=8) +
+  geom_point(aes(x = x0[1] , y= y1[1]), color="red", size=8) +
+  ggtitle("K-S Test: Sample 1 / Sample 2") +
+  theme(legend.title=element_blank())
+```
+
+**Part 2 - Population state dynamics**
+
+#Tanaka growth function. 
+#From Ebert, T. A. (2010). Demographic patterns of the purple sea urchin Strongylocentrotus purpuratus along a latitudinal gradient, 1985–1987. Marine Ecology Progress Series, 406, 105-120. - use Bodega Bay for growth params
+
+# Paramaters for Tanaka function:
+# NOTE: used figure 7 from Ebert to extract 95% CI for growth increment at 3 cm for Bodega (0.05cm)
+# with sample size of 141, back calculated SD based on 95% CI = +/- 1.96 * SE/sqrt(n)
+# Sig = .05*sqrt(141)/1.96
+# gives SD of growth increment of .575 cm as 0.3 cm (~ CV of 0.3/.525 = 0.57)
+```{r}
+DatU.raw <- read.csv('size_year.csv')
+
+FrequencyTable <- DatU.raw
+DatU <- expand.dft(FrequencyTable, freq="count")
+
+a =  0.558
+d =  1.432
+f =  1.3
+CV = .57
+Sig = 0.3
+reps = 500
+# Define size classes:
+Size = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) 
+E = exp(sqrt(f)*((Size-.2)-d))
+Size2 = 1/sqrt(f)*log(2*f*(E/(4*f) - a/E +1) + 2*sqrt((f^2)*(E/(4*f) - a/E +1)^2 + f*a )) + d 
+Incsize = pmax(.1,Size2 - (Size-.2))
+plot(Size,Incsize)
+Dt_det = DatU$size[DatU$size<10] 
+Inc_det = numeric(length = length(Dt_det))
+for(i in 1:9){
+  ii = which(Dt_det==Size[i])
+  Inc_det[ii] = Incsize[i]
+}
+b = Inc_det / Sig^2
+Gr_rnd = numeric(length = length(Dt_det))
+for (r in 1:reps){
+  Dt = Dt_det + runif(length(Dt_det), -.4999, .4999)
+  Dt1 = round(Dt + rgamma(length(Dt),Inc_det*b,b))
+  Gr_rnd = Gr_rnd + pmax(0,pmin(1,Dt1 - Dt_det))
+}
+df = data.frame(Sz = factor(Dt_det), GrP = Gr_rnd/reps)
+G_hat = df %>% dplyr::group_by(Sz) %>% dplyr::summarise(mean = mean(GrP),
+                                                        sd = sd(GrP))
+print('G prob values: ')
+noquote(paste(format(G_hat$mean,digits=3),collapse = ','))
+```
+#boxplot of growth probability
+```{r}
+plt_Gr1 = ggplot(df,aes(x=Sz,y=GrP,group=Sz)) +
+  geom_boxplot() +
+  labs(x="Size class",y="Growth transition probability") +
+  theme_classic()
+print(plt_Gr1)
+```
+# Plot stochastic urchin growth increments scatter plot 
+```{r}
+Size = seq(.1,10,by=.1) 
+E = exp(sqrt(f)*((Size)-d))
+Size2 = 1/sqrt(f)*log(2*f*(E/(4*f) - a/E +1) + 2*sqrt((f^2)*(E/(4*f) - a/E +1)^2 + f*a )) + d 
+Incsize = pmax(.1,Size2 - (Size))
+smth = smooth.spline(Size,Incsize) 
+Dt = Dt_det + runif(length(Dt_det), -.4999, .4999)
+E = exp(sqrt(f)*(Dt-d))
+Dt1_det = 1/sqrt(f)*log(2*f*(E/(4*f) - a/E +1) + 2*sqrt((f^2)*(E/(4*f) - a/E +1)^2 + f*a )) + d
+Inc_det = pmax(.2,Dt1_det - Dt)
+b = Inc_det / Sig^2
+Inc_stoch = rgamma(length(Dt),Inc_det*b,b)
+ii = which(Dt_det == 1 | Dt_det>6)
+ii = c(ii, sample(which(Dt_det == 2 | Dt_det == 6),1000))
+ii = c(ii, sample(which(Dt_det > 2 | Dt_det<6),3000))
+df2 = data.frame(Size=Dt[ii],Growth_increment=Inc_stoch[ii])
+plt_Gr2 = ggplot(df2,aes(x=Size,y=Growth_increment)) +
+  geom_point(shape=16,color="darkgrey") +
+  geom_line(data=data.frame(Size=Size,Gr_mean=smth$y),aes(x=Size,y=Gr_mean),
+            size=1.1,color="blue") +
+  labs(x="Size (cm)",y="Growth increment (cm)") +
+  theme_classic()
+print(plt_Gr2)
+```
+## Outputs from the growth model, stage-specific transition probabilities
+```{r}
+growth_matrix <- matrix(
+  c(
+    1-G_hat[1,2], 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    G_hat[1,2], 1-G_hat[2,2], 0, 0, 0, 0, 0, 0, 0, 0,
+    0, G_hat[2,2], 1-G_hat[3,2], 0, 0, 0, 0, 0, 0, 0,
+    0, 0, G_hat[3,2], 1-G_hat[4,2], 0, 0, 0, 0, 0, 0,
+    0, 0, 0, G_hat[4,2], 1-G_hat[5,2], 0 ,0 ,0 ,0 ,0,
+    0, 0, 0, 0, G_hat[5,2], 1-G_hat[6,2], 0, 0, 0, 0,
+    0, 0, 0, 0, 0, G_hat[6,2], 1-G_hat[7,2],0 ,0, 0,
+    0, 0, 0, 0, 0, 0, G_hat[7,2], 1-G_hat[8,2], 0, 0,
+    0, 0, 0, 0, 0, 0, 0, G_hat[8,2], 1-G_hat[9,2], 0,
+    0, 0, 0, 0, 0, 0, 0, 0, G_hat[9,2], 0),
+  nrow=10, ncol=10, byrow=T
+)
+print(growth_matrix)
+```
+
+**Process Model**
+#Load Data
+```{r}
+dat = read.csv("size_year.csv")
+dat2 = read.csv("den_year.csv")
+saveresults = 0
+loadresults = 1
+```
+
+#Process Data
+```{r}
+Syear = dat2$year
+Year1 = min(Syear)
+YearT = max(Syear)
+Years = seq(Year1,YearT)
+Syear = Syear - Year1 + 1
+Nsurvey = length(Syear)
+Nyrs = length(Years)
+YrB = which(Years==2013)
+Density = dat2$den
+Nsz = 10
+Szyear = unique(dat$year)
+Szyear = Szyear - Year1 + 1
+Nszobs = length(Szyear)
+Obs_Sz = tidyr::pivot_wider(dat,id_cols = year, names_from = size, values_from = count)
+Obs_Sz = as.matrix(Obs_Sz[,-1])
+Obs_Sz[which(is.na(Obs_Sz))] = 0  
+Szds_obs = Obs_Sz
+Obs_Tot = rowSums(Szds_obs)
+Obs_Sz = Obs_Sz + .1
+SzDst_N = rowSums(Obs_Sz)
+Sample_sizes = SzDst_N
+Obs_Sz = sweep(Obs_Sz,1,FUN="/",STATS=rowSums(Obs_Sz))
+
+Gr = c(0.8956,0.9294,0.5958,0.2500,0.0853,0.0852,0.0848,0.0859,0.0831) #Growth Probabilities
+
+#avg size across years
+SZobsall = colMeans(Obs_Sz)
+Sizes=seq(1,Nsz)
+```
+
+#Use matrix to set initial values
+```{r}
+makemat <- function(Ns,S,G) {
+  M = matrix(0,nrow = Ns,ncol = Ns)
+  diag(M[1:(Ns-1),1:(Ns-1)]) = S[1:(Ns-1)] * (1 -  G[1:(Ns-1)])
+  diag(M[2:Ns,1:(Ns-1)]) = S[1:(Ns-1)] * G[1:(Ns-1)]
+  # M[Ns,Ns] = S[Ns] 
+  return(M)
+}
+# gamma0 ~ normal(-1.62,.28)  # (Russell, 1987 https://doi.org/10.1016/0022-0981(87)90085-2.)
+gamm0 = -1.62
+# Set "arbitrary" value of recruitment (200 - 300 range is reasonable)
+# (arbitrary in the sense that it will determine the size of pop'n of interest)
+R0 = 20    
+R0pri=log(R0)
+N0 = 4.5*R0   # Arbitrary starting value of "true" pop abundance(~ 4.5*R0)
+S0 = exp(-exp(gamm0))
+S1 = rep(S0,Nsz)
+M = makemat(Nsz,S1,Gr)
+n0 = N0*SZobsall
+reps = 50
+n = matrix(0,nrow = Nsz,ncol = reps); n[,1] = n0
+N = numeric(length = reps); N[1] = sum(n[,1]) 
+Rt = c(R0,rep(0, Nsz-1))
+for(t in 2:reps){
+  n[,t] = M %*% (n[,t-1] + Rt)
+  N[t] = sum(n[,t])
+}
+# Re-set N0 to the equilibrium abundance associated with baseline params
+N0 = N[reps] 
+plot(1:reps,N,type = "l")
+# Solve for parameters of detection probability fxn, given baseline params
+detect.fxn <- function(x, s, a, b) {
+  ( exp( a - b*(1/s)^2 )/(1+exp( a - b*(1/s)^2 )) ) * x
+}
+df = data.frame(y = SZobsall*Density[1],x = n[,reps], s = seq(1,10))
+df$s[1] = 1.75
+ft = nls(y ~ detect.fxn(x,s,a,b), data = df,
+         start = list(a = -6, b = 2.5))
+summary(ft)
+Ppar1 = as.numeric(coef(ft)[1]) 
+Ppar2 = as.numeric(coef(ft)[2]) 
+lgtPD = (Ppar1) - (Ppar2) * ( 1/pmax(1.75,Sizes) )^2 
+PD = inv.logit( lgtPD )
+plot(Sizes,PD,type="l",main="Detection probability vs size, functional form")
+#
+Ppar1 = log(0.02)
+#
+# Initial "true" size distribution (expected)
+SZinit = n[,reps]/sum(n[,reps])
+dt = n[,reps] * PD
+D0 = sum(dt); D0 # should be approx. same as initial count
+Density[1]
+# Initial predicted detectable size distribution
+SZpred = dt/sum(dt)
+# Create plot to compare observed vs predicted size distribution
+dftmp = data.frame(Category = factor(c(rep("Observed",Nsz),rep("Predicted",Nsz))),
+                   Size = c(Sizes,Sizes),Frequency = c(SZobsall,SZpred))
+ggplot(dftmp, aes(Size, Frequency, fill = Category)) + 
+  geom_bar(stat="identity", position = "dodge") + 
+  scale_fill_brewer(palette = "Set1")
+```
+
+#Fit Model
+```{r}
+if (loadresults==1){
+  load("Urchin_results.rdata")
+  fit = readRDS(file = "Urchin_fit.RDS")
+}else{
+  nburnin = 2000                    # number warm-up (burn-in) samples
+  nsamples = 10000                 # desired total number samples
+  cores = detectCores()
+  ncore = min(10,cores-1)
+  Niter = round(nsamples/ncore)
+  stan.data <- list(Nyrs=Nyrs,YrB=YrB,Nsz=Nsz,Nszobs=Nszobs,Sy=Szyear,
+                    SzDst_N=SzDst_N,Obs_Sz=Obs_Sz,Nsurvey=Nsurvey,Dy=Syear,
+                    Density=Density,Gr=Gr,SZinit=SZinit,gamma_pri=gamm0,
+                    R0pri=R0pri,N0pri=N0,alpha=Ppar1,Beta_pri=Ppar2,
+                    Zeros=rep(0,Nsz),sizes=df$s ) 
+  parms = c("Tstat","Tstat_new","ppp","phi","theta","sigR","sigS","sigP","gamma0",
+            "Beta","R0","Rmn_pre","Rmn_post","logRdff","Smn_pre","Smn_post",
+            "logSdff","Pmn_pre","Pmn_post","logPdff","R","S","N","Pmax","P",
+            "n0","D","SzDst","ynew") # "zeta",
+  fitmodel = c("Urchsize_fit3.stan")
+  mod <- cmdstan_model(fitmodel)   # compiles model (if necessary)
+  suppressMessages(                # Suppress messages/warnings (if desired)
+    suppressWarnings (
+      fit <- mod$sample(
+        data = stan.data,
+        seed = 123,
+        chains = ncore,
+        parallel_chains = ncore,
+        refresh = 100,
+        #init = init.fun,
+        iter_warmup = nburnin,
+        iter_sampling = Niter,
+        max_treedepth = 12,
+        adapt_delta = .85
+      )
+    )
+  )
+  # tmp = fit$output(); tmp[[1]][40:60]
+  source("cmdstan_sumstats.r")
+  if(saveresults == 1){
+    fit$save_object(file = "Urchin_fit.RDS")
+    rm(fit)
+    save.image(file = "Urchin_results.rdata")
+    fit = readRDS(file = "Urchin_fit.RDS")
+  }
+}
+
+```
+
+#Examine results
+```{r}
+# (note: using final model, Model 8 = shift in all variables)
+mcmc_trace(fit$draws("sigR"))
+mcmc_trace(fit$draws("sigS"))
+mcmc_trace(fit$draws("sigP"))
+mcmc_trace(fit$draws("phi"))
+
+set.seed(123)
+rr = sample(Nsims,min(Nsims,1000))
+Bayes_P = sumstats[which(vns=="ppp"),1]
+if(Bayes_P>0.75){Bayes_P=1-Bayes_P}
+xx = log(as.matrix(mcmc[,vns=="Tstat"][rr]))
+yy = log(as.matrix(mcmc[,vns=="Tstat_new"][rr]))
+df_ppc = data.frame(x = xx, y = yy)
+ppc_plot1 = ggplot(df_ppc,aes(x=x,y=y)) +
+  geom_point(color="blue") + 
+  labs(x="Discrepancy measure for actual data set",
+       y = "Discrepancy measure for new data",
+       title= "Posterior predictive check, sum of squared Pearson residuals", 
+       subtitle = paste0("Bayesian-P = ",Bayes_P)) +
+  geom_abline(slope=1,intercept=0) +
+  theme_classic()
+# print(ppc_plot1)
+y_rep = as.matrix(log(mcmc[,startsWith(vn, "ynew[")]))
+y_obs = log(Density)
+ppc_plot2 = ppc_dens_overlay(y_obs, y_rep[1:50, ]) + # xlim(0,10000) +
+  labs(x = "log Denisty", y = "Relative frequency") +
+  ggtitle("Posterior predictive distribution, observed (y) vs out-of-sample (y-rep)") 
+plot_grid(ppc_plot1,ppc_plot2, labels = c('A', 'B'), nrow = 2, greedy = T)
+  
+mcmc_areas(fit$draws(c("phi")),
+           area_method="equal height",
+           prob = 0.8) + 
+  ggtitle("Parameter posterior distributions") +
+  labs(x="Parameter value",y="Posterior density") +
+  theme_classic()
+
+mcmc_areas(fit$draws(c("sigR","sigS","sigP")),
+           area_method="equal height",
+           prob = 0.8) + 
+  ggtitle("Parameter posterior distributions") +
+  labs(x="Parameter value",y="Posterior density") +
+  theme_classic()
+
+mcmc_areas(fit$draws(c("Beta")),
+           area_method="equal height",
+           prob = 0.8) + 
+  ggtitle("Parameter posterior distributions") +
+  labs(x="Parameter value",y="Posterior density") +
+  theme_classic()
+
+mcmc_areas(fit$draws(c("theta")),
+           area_method="equal height",
+           prob = 0.8) + 
+  ggtitle("Parameter posterior distributions") +
+  labs(x="Parameter value",y="Posterior density") +
+  theme_classic()
+
+mcmc_areas(fit$draws(c("logRdff","logSdff","logPdff")),
+           area_method="equal height",
+           prob = 0.8,adjust = 1.8) + 
+  ggtitle("Log proportional change in parameters, 2014-17 vs. 2003-13") +
+  labs(x="Parameter value",y="Posterior density") +
+  scale_y_discrete(labels=c("Recruitment","Survival","Detection Probability")) +
+  theme_classic()
+
+alpha = stan.data$alpha
+Beta = mcmc[,which(startsWith(vns,"Beta"))]
+lgtPD = matrix(NA,nrow = Nsims,ncol = Nsz)
+for(i in 1:Nsz){
+  lgtPD[,i] = alpha - Beta * ( 1/max(1.75,Sizes[i]) )^2 
+}
+PD_reps = inv.logit( lgtPD )
+df_PD = data.frame(Size = Sizes,
+                   PD_mn = colMeans(PD_reps),
+                   PD_sd = apply(PD_reps,2,sd),
+                   PD_lo = apply(PD_reps,2,quantile,prob=0.05),
+                   PD_hi = apply(PD_reps,2,quantile,prob=0.95))
+ggplot(df_PD,aes(x=Size,y=PD_mn)) +
+  geom_ribbon(aes(ymin=PD_lo,ymax=PD_hi),alpha=0.3) +
+  geom_line() +
+  labs(x="Urchin size (cm)",y="Probability of detection") +
+  ggtitle("Detection probability vs size, baseline") +
+  theme_classic()
+
+theta = sumstats[which(startsWith(vns,"theta[")),1]
+SSz = seq(1,max(Sample_sizes))
+precis=theta[1]*(SSz^theta[2])
+plot(SSz,precis,type="l",col='red',xlab = "Sample size",ylab="Dirichlet precision",
+     main="Effect of sample size on precision of Dirichlet distribution")
+
+Dpred = sumstats[which(startsWith(vns,"D[")),6]
+Dpred_lo = sumstats[which(startsWith(vns,"D[")),4]
+Dpred_hi = sumstats[which(startsWith(vns,"D[")),8]
+df_dnsplt = data.frame(Year=Years,Dpred=Dpred,
+                       Dpred_lo=Dpred_lo,Dpred_hi=Dpred_hi)
+df_dnsplt$Dobs = rep(NA,Nyrs)
+df_dnsplt$Dobs[Syear] = Density
+plt_D_trend = ggplot(df_dnsplt,aes(x=Year,y=Dpred)) +
+  geom_ribbon(aes(ymin=Dpred_lo,ymax=Dpred_hi),alpha=0.3) +
+  geom_line() + geom_point(aes(y=Dobs)) +
+  labs(x="Year",y="Density (# per transect)") +
+  ggtitle("Urchin density, predicted vs observed (points)") +
+  theme_classic()
+ print(plt_D_trend)
+
+Ppred = sumstats[which(startsWith(vns,"Pmax[")),1]
+Ppred_lo = sumstats[which(startsWith(vns,"Pmax[")),5]
+Ppred_hi = sumstats[which(startsWith(vns,"Pmax[")),7]
+df_Pplt = data.frame(Year=Years,Ppred=Ppred,
+                       Ppred_lo=Ppred_lo,Ppred_hi=Ppred_hi)
+plt_P_trend = ggplot(df_Pplt,aes(x=Year,y=Ppred)) +
+  geom_ribbon(aes(ymin=Ppred_lo,ymax=Ppred_hi),alpha=0.3) +
+  geom_line() + xlim(2003,2020) +
+  labs(x="Year",y="Probability of detection") +
+  ggtitle("Urchin detection probability") +
+  theme_classic()
+#print(plt_P_trend)
+
+Rpred = sumstats[which(startsWith(vns,"R[")),1]
+Rpred_lo = sumstats[which(startsWith(vns,"R[")),5]
+Rpred_hi = sumstats[which(startsWith(vns,"R[")),7]
+df_Rplt = data.frame(Year=Years,Rpred=Rpred,
+                     Rpred_lo=Rpred_lo,Rpred_hi=Rpred_hi)
+plt_R_trend = ggplot(df_Rplt,aes(x=Year,y=Rpred)) +
+  geom_ribbon(aes(ymin=Rpred_lo,ymax=Rpred_hi),alpha=0.3) +
+  geom_line() + xlim(2003,2020) +
+  labs(x="Year",y="Recruitment density") +
+  ggtitle("Urchin recruitment (# per transect)") +
+  theme_classic()
+#print(plt_R_trend)
+
+Spred = sumstats[which(startsWith(vns,"S[")),1]
+Spred_lo = sumstats[which(startsWith(vns,"S[")),5]
+Spred_hi = sumstats[which(startsWith(vns,"S[")),7]
+df_Splt = data.frame(Year=Years,Spred=Spred,
+                     Spred_lo=Spred_lo,Spred_hi=Spred_hi)
+plt_S_trend = ggplot(df_Splt,aes(x=Year,y=Spred)) +
+  geom_ribbon(aes(ymin=Spred_lo,ymax=Spred_hi),alpha=0.3) +
+  geom_line() + xlim(2003,2020) +
+  labs(x="Year",y="Annual Survival rate") +
+  ggtitle("Urchin annual survival rate") +
+  theme_classic()
+#print(plt_S_trend)
+
+plot_grid(plt_P_trend,plt_R_trend,plt_S_trend,
+          labels = c('A', 'B', 'C'), nrow = 3, 
+          align = "v", axis="l")
+
+Szds_prd = matrix(0,nrow = Nyrs,ncol = Nsz)
+c = 0
+for(t in Szyear){
+  c = c+1
+  for(i in 1:Nsz){
+    Szds_prd[c,i] = sumstats[which(vns==paste0("SzDst[",t,",",i,"]")),1] * Obs_Tot[c]
+  }
+}
+plts = list()
+c = 0
+for(t in Szyear[-1]){  
+  c = c+1
+  dftmp = data.frame(Category = factor(c(rep("Observed",Nsz),rep("Predicted",Nsz))),
+                     Size = c(Sizes,Sizes),Frequency = c(Szds_obs[c,] ,Szds_prd[c,]))
+  plts[[c]] = ggplot(dftmp, aes(Size, Frequency, fill = Category)) + 
+    geom_bar(stat="identity", position = "dodge") + 
+    scale_fill_brewer(palette = "Set1") +
+    ggtitle(paste0("Year = ",Years[t], ", N = ",Sample_sizes[c])) +
+  theme_classic() + theme(legend.position = "none")
+}
+grid.arrange(grobs=plts,nrow = 5, ncol = 2 )
+
+ii = numeric()
+ii = c(ii, which(vns == "ppp"))
+ii = c(ii, which(startsWith(vns,"sigR[")))
+ii = c(ii, which(startsWith(vns,"sigS[")))
+ii = c(ii, which(startsWith(vns,"sigP[")))
+ii = c(ii, which(vns == "R0"))
+ii = c(ii, which(vns == "gamma0"))
+ii = c(ii, which(vns == "Beta"))
+ii = c(ii, which(startsWith(vns,"phi")))
+ii = c(ii, which(startsWith(vns,"theta[")))
+ii = c(ii, which(startsWith(vns,"logRdff")))
+ii = c(ii, which(startsWith(vns,"logSdff")))
+ii = c(ii, which(startsWith(vns,"logPdff")))
+sumtab = sumstats[ii,c(1,3,5,7,9,10)]
+htmlTable(format(sumtab,digits=4))
+```
+
+**Sensitivity analysis**
+```{r}
+# Explore the proportional variation in total urchin abundance explained
+# by variation in R, S and P
+# 
+reps = 5000
+set.seed(123)
+rr = sample(Nsims,reps,replace = T)
+alpha = as.numeric(stan.data$alpha) 
+Beta = mcmc[,which(startsWith(vn,"Beta"))]
+R = mcmc[,which(startsWith(vn,"R["))]
+S = mcmc[,which(startsWith(vn,"S["))]
+n0 = mcmc[,which(startsWith(vn,"n0["))]
+R0 = mcmc[,which(startsWith(vn,"R0"))]
+gamma0 = mcmc[,which(startsWith(vn,"gamma0"))]
+sigR = mcmc[,which(startsWith(vn,"sigR[1"))]
+sigS = mcmc[,which(startsWith(vn,"sigS[1"))]
+sigP = mcmc[,which(startsWith(vn,"sigP[1"))]
+Nyrs2 = which(Years == 2017)  
+halfnorm = rnorm(10000,0,1); 
+halfnorm = data.frame(R = sample(halfnorm[halfnorm>0],reps+Nyrs,replace = T),
+                      S = sample(halfnorm[halfnorm>0],reps+Nyrs,replace = T),
+                      P = sample(halfnorm[halfnorm>0],reps+Nyrs,replace = T))
+# Base model projection
+ii = which(startsWith(vn,"D["))
+Dbase = mcmc[rr,ii]
+Incr_base = rowMeans(Dbase[,(YrB+1):(Nyrs-1)]) - rowMeans(Dbase[,2:YrB])  
+#
+# Prob detection change only
+iix = matrix(0,nrow = Nyrs,ncol = 10)
+for(y in 1:Nyrs){
+  iix[y,1:10] = which(startsWith(vn,paste0("P[",y,",")))
+}
+D = matrix(0,nrow = reps,ncol = Nyrs)
+for(j in 1:reps){
+  r = rr[j]
+  P = matrix(0,nrow = Nsz,ncol = Nyrs)
+  d = matrix(0,nrow = Nsz,ncol = Nyrs)
+  n = matrix(0,nrow = Nsz,ncol = Nyrs)
+  # Yr1
+  S1 = rep(S[r,1],Nsz)
+  R1 = c(R[r,1],rep(0, Nsz-1))
+  M1 = makemat(Nsz,S1,Gr)
+  n0r = as.numeric(n0[r,])
+  n[,1] = M1 %*% (as.matrix(n0r) + R1)
+  P[,1] = mcmc[r,iix[1,]] 
+  d[,1] = n[,1] * P[,1] 
+  D[j,1] = sum(d[,1]) 
+  #D[1] = sum(d[,1]) 
+  for (t in 2:Nyrs){
+    St = rep(exp(-exp(gamma0[r] - sigS[r] * halfnorm$S[j+t])),Nsz)
+    Rt = c(exp(R0[r] + sigR[r] * halfnorm$R[j+t]),rep(0, Nsz-1))
+    Mt = makemat(Nsz,St,Gr)
+    n[,t] = Mt %*% (n[,t-1] + Rt)
+    P[,t] = mcmc[r,iix[t,]] 
+    d[,t] = n[,t] * P[,t] 
+    D[j,t] = sum(d[,t]) 
+  }
+}
+Incr_PDvary = rowMeans(D[,(YrB+1):(Nyrs-1)]) - rowMeans(Dbase[,2:YrB])
+iinz = which(Incr_PDvary>0 & Incr_PDvary<Incr_base)
+Effct_P = Incr_PDvary[iinz]/Incr_base[iinz]
+#
+# Recruitment change only
+D = matrix(0,nrow = reps,ncol = Nyrs)
+for(j in 1:reps){
+  r = rr[j]
+  P = matrix(0,nrow = Nsz,ncol = Nyrs)
+  d = matrix(0,nrow = Nsz,ncol = Nyrs)
+  n = matrix(0,nrow = Nsz,ncol = Nyrs)
+  lgtPD = numeric()
+  for(i in 1:Nsz){
+    lgtPD[i] = alpha - Beta[r] * (1 / Sizes[i])^2 ;
+  }  
+  P[,1] = mcmc[r,iix[1,]]  
+  S1 = rep(S[r,1],Nsz)
+  R1 = c(R[r,1],rep(0, Nsz-1))
+  M1 = makemat(Nsz,S1,Gr)
+  n0r = as.numeric(n0[r,])
+  n[,1] = M1 %*% (as.matrix(n0r) + R1)
+  d[,1] = n[,1] * P[,1] 
+  D[j,1] = sum(d[,1]) 
+  for (t in 2:Nyrs){
+    St = rep(exp(-exp(gamma0[r] - sigS[r] * halfnorm$S[j+t])),Nsz)
+    Rt = c(R[r,t],rep(0, Nsz-1))
+    Mt = makemat(Nsz,St,Gr)
+    n[,t] = Mt %*% (n[,t-1] + Rt)
+    P[,t] = inv.logit(lgtPD + sigP[r] * halfnorm$P[j+t]) 
+    d[,t] = n[,t] * P[,t] 
+    D[j,t] = sum(d[,t]) 
+  }
+}
+Incr_Rvary = rowMeans(D[,(YrB+1):(Nyrs-1)]) - rowMeans(Dbase[,2:YrB])
+iinz = which(Incr_Rvary>0 & Incr_Rvary<Incr_base)
+Effct_R = Incr_Rvary[iinz]/Incr_base[iinz]
+#
+# Survival change only
+D = matrix(0,nrow = reps,ncol = Nyrs)
+for(j in 1:reps){
+  r = rr[j]
+  P = matrix(0,nrow = Nsz,ncol = Nyrs)
+  d = matrix(0,nrow = Nsz,ncol = Nyrs)
+  n = matrix(0,nrow = Nsz,ncol = Nyrs)
+  lgtPD = numeric()
+  for(i in 1:Nsz){
+    lgtPD[i] = alpha - Beta[r] * (1 / Sizes[i])^2 ;
+  }  
+  P[,1] = mcmc[r,iix[1,]] 
+  S1 = rep(S[r,1],Nsz)
+  R1 = c(R[r,1],rep(0, Nsz-1))
+  M1 = makemat(Nsz,S1,Gr)
+  n0r = as.numeric(n0[r,])
+  n[,1] = M1 %*% (as.matrix(n0r) + R1)
+  d[,1] = n[,1] * P[,1] 
+  D[j,1] = sum(d[,1]) 
+  for (t in 2:Nyrs){
+    St = rep(S[r,t],Nsz)
+    Rt = c(exp(R0[r] + sigR[r] *  halfnorm$R[j+t]),rep(0, Nsz-1))
+    Mt = makemat(Nsz,St,Gr)
+    n[,t] = Mt %*% (n[,t-1] + Rt)
+    P[,t] = inv.logit(lgtPD + sigP[r] * halfnorm$P[j+t]) 
+    d[,t] = n[,t] * P[,t] 
+    D[j,t] = sum(d[,t]) 
+  }
+}
+Incr_Svary = rowMeans(D[,(YrB+1):(Nyrs-1)]) - rowMeans(Dbase[,2:YrB])
+iinz = which(Incr_Svary>0 & Incr_Svary<Incr_base)
+Effct_S = Incr_Svary[iinz]/Incr_base[iinz]
+#
+iinz = which(Incr_PDvary>0 & Incr_Rvary>0 & Incr_Svary>0 & 
+              (Incr_PDvary + Incr_Rvary + Incr_Svary) < Incr_base)
+Effct_R = Incr_Rvary[iinz] / (Incr_PDvary[iinz] + Incr_Rvary[iinz] + Incr_Svary[iinz])
+Effct_S = Incr_Svary[iinz] / (Incr_PDvary[iinz] + Incr_Rvary[iinz] + Incr_Svary[iinz])
+Effct_P = Incr_PDvary[iinz] / (Incr_PDvary[iinz] + Incr_Rvary[iinz] + Incr_Svary[iinz])
+iir = sample(length(iinz),1000,replace = T)
+
+df_Param_effect = data.frame(Param = c(rep("Recruitment",1000),
+                                       rep("Survival",1000),
+                                       rep("Detection probability",1000)),
+                             Effect = c(Effct_R[iir],Effct_S[iir],Effct_P[iir]))
+df_Param_effect$Param = factor(df_Param_effect$Param)
+df_Param_effect %>% group_by(Param) %>% dplyr::summarise(mmedian_eff = median(Effect))
+
+plt_P_effects = ggplot(df_Param_effect,aes(x=Param,y=Effect)) + #,group=Param,fill=Param
+  geom_boxplot(outlier.shape = NA) + 
+  # geom_violin() + 
+  labs(x = "Focal parameter",y ="Proportion of trend explained") +
+  ggtitle("Relative contribution to observed increase") +
+  theme_classic()
+ print(plt_P_effects)
+
+plot_grid(plt_D_trend,plt_P_trend,plt_P_effects,
+          labels = c('A', 'B', 'C'), nrow = 3, 
+          align = "v", axis="l")
+```
+
+
+**Part 3 - Patch Level Dynamics**
+
+#LDA predicted patch state
+```{r}
+#LDA
+patch.data<-read.csv("patch_data.csv")
+
+#2017 --- note that Macrocystis stipe counts were not conducted in 2017, so two LDAs were constructed, one for 2017 without Macstipes, and one for 2018-2019 with Macstipes. 
+lda_1 <- patch.data %>%
+  filter(year == c('2017'))
+
+lda.analysis.1<-lda(state~articulated_cov+brown_cov+encrusting_cov+pur_den+prop_pur_exp+foliosered_cov, data=lda_1)
+
+lda.analysis.1.p<-predict(lda.analysis.1,newdata=lda_1[,c('articulated_cov','brown_cov','encrusting_cov','pur_den','prop_pur_exp','foliosered_cov')])$class
+
+
+table(lda.analysis.1.p,lda_1[,'state'])
+
+#2018-2019
+lda_2 <- patch.data %>%
+  filter(year %in% c(2018,2019))
+
+
+lda.analysis.2<-lda(state~articulated_cov+brown_cov+encrusting_cov+pur_den+prop_pur_exp+foliosered_cov+mac_stipe_den, data=lda_2)
+
+lda.analysis.2.p<-predict(lda.analysis.2,newdata=lda_2[,c('articulated_cov','brown_cov','encrusting_cov','pur_den','prop_pur_exp','foliosered_cov', 'mac_stipe_den')])$class
+
+
+table(lda.analysis.2.p,lda_2[,'state'])
+```
+
+#determine functional form using predicted states from LDA
+```{r}
+#Derived dataset with patch transition dynamics from the LDA predicted states.
+patch.data<-read.csv("patch_transition.csv")
+
+head(patch.data)
+
+y <- patch.data$logit_lda
+x <- patch.data$den_exposed_start
+
+plot(x,y)
+
+
+plot(x,predict(loess(y~x))) #this suggests that the mean of Y is not linear in X
+
+
+logitloess <- function(x, y, s) {
+  
+  logit <- function(pr) {
+    log(pr/(1-pr))
+  }
+  
+  if (missing(s)) {
+    locspan <- 1.3
+  } else {
+    locspan <- s
+  }
+  
+  loessfit <- predict(loess(y~x,span=locspan))
+  pi <- pmax(pmin(loessfit,0.9999),0.0001)
+  logitfitted <- logit(pi)
+  
+  plot(x, logitfitted, ylab="logit")
+  
+}
+
+logitloess(x,y)
+
+```
+
+```{r}
+#based on results above, use natural log functional form for logistic model
+
+logit.data <- read.csv("H2_logistic.csv")
+
+#best explained model
+transition_logit.best<-glm(logit_pred ~ state_start + ln_den_exp_start + ln_den_exp_start*state_start, data = logit.data, family = binomial(link="logit"))
+summary(transition_logit.best)
+
+#second best model
+transition_logit.second<-glm(logit_pred ~ state_start + ln_prop_exp_start + ln_prop_exp_start*state_start, data = logit.data, family = binomial(link="logit"))
+summary(transition_logit.second)
+
+#third best model
+transition_logit.third<-glm(logit_pred ~ state_start + ln_den_conceiled_start + ln_den_conceiled_start*state_start, data = logit.data, family = binomial(link="logit"))
+summary(transition_logit.third)
+
+```
+
