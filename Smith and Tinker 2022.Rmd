@@ -392,7 +392,6 @@ ggplot(dftmp, aes(Size, Frequency, fill = Category)) +
 ```{r}
 if (loadresults==1){
   load("Urchin_results.rdata")
-  fit = readRDS(file = "Urchin_fit.RDS")
 }else{
   nburnin = 2000                    # number warm-up (burn-in) samples
   nsamples = 10000                 # desired total number samples
@@ -428,11 +427,9 @@ if (loadresults==1){
   )
   # tmp = fit$output(); tmp[[1]][40:60]
   source("cmdstan_sumstats.r")
+  rm(fit)
   if(saveresults == 1){
-    fit$save_object(file = "Urchin_fit.RDS")
-    rm(fit)
     save.image(file = "Urchin_results.rdata")
-    fit = readRDS(file = "Urchin_fit.RDS")
   }
 }
 
@@ -440,12 +437,6 @@ if (loadresults==1){
 
 #Examine results
 ```{r}
-# (note: using final model, Model 8 = shift in all variables)
-mcmc_trace(fit$draws("sigR"))
-mcmc_trace(fit$draws("sigS"))
-mcmc_trace(fit$draws("sigP"))
-mcmc_trace(fit$draws("phi"))
-
 set.seed(123)
 rr = sample(Nsims,min(Nsims,1000))
 Bayes_P = sumstats[which(vns=="ppp"),1]
@@ -469,40 +460,11 @@ ppc_plot2 = ppc_dens_overlay(y_obs, y_rep[1:50, ]) + # xlim(0,10000) +
   ggtitle("Posterior predictive distribution, observed (y) vs out-of-sample (y-rep)") 
 plot_grid(ppc_plot1,ppc_plot2, labels = c('A', 'B'), nrow = 2, greedy = T)
   
-mcmc_areas(fit$draws(c("phi")),
+mcmc_areas(mcmc, pars = vars("logRdff","logSdff","logPdff"),
            area_method="equal height",
            prob = 0.8) + 
   ggtitle("Parameter posterior distributions") +
   labs(x="Parameter value",y="Posterior density") +
-  theme_classic()
-
-mcmc_areas(fit$draws(c("sigR","sigS","sigP")),
-           area_method="equal height",
-           prob = 0.8) + 
-  ggtitle("Parameter posterior distributions") +
-  labs(x="Parameter value",y="Posterior density") +
-  theme_classic()
-
-mcmc_areas(fit$draws(c("Beta")),
-           area_method="equal height",
-           prob = 0.8) + 
-  ggtitle("Parameter posterior distributions") +
-  labs(x="Parameter value",y="Posterior density") +
-  theme_classic()
-
-mcmc_areas(fit$draws(c("theta")),
-           area_method="equal height",
-           prob = 0.8) + 
-  ggtitle("Parameter posterior distributions") +
-  labs(x="Parameter value",y="Posterior density") +
-  theme_classic()
-
-mcmc_areas(fit$draws(c("logRdff","logSdff","logPdff")),
-           area_method="equal height",
-           prob = 0.8,adjust = 1.8) + 
-  ggtitle("Log proportional change in parameters, 2014-17 vs. 2003-13") +
-  labs(x="Parameter value",y="Posterior density") +
-  scale_y_discrete(labels=c("Recruitment","Survival","Detection Probability")) +
   theme_classic()
 
 alpha = stan.data$alpha
