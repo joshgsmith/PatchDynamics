@@ -289,7 +289,7 @@ print(growth_matrix)
 #Load Data
 ```{r}
 dat = read.csv("data/size_year.csv")
-dat2 = read.csv("data/den_year.csv")
+dat2 = read.csv("data/Density_year.csv")
 saveresults = 0
 loadresults = 1
 ```
@@ -318,10 +318,9 @@ Obs_Sz = Obs_Sz + .1
 SzDst_N = rowSums(Obs_Sz)
 Sample_sizes = SzDst_N
 Obs_Sz = sweep(Obs_Sz,1,FUN="/",STATS=rowSums(Obs_Sz))
-
-Gr = c(0.8956,0.9294,0.5958,0.2500,0.0853,0.0852,0.0848,0.0859,0.0831) #Growth Probabilities
-
-#avg size across years
+# Growth probabilities from Josh's analysis:
+Gr = c(0.8956,0.9294,0.5958,0.2500,0.0853,0.0852,0.0848,0.0859,0.0831)
+# Average observed size frequency distribution across all years
 SZobsall = colMeans(Obs_Sz)
 Sizes=seq(1,Nsz)
 ```
@@ -408,7 +407,7 @@ if (loadresults==1){
   parms = c("Tstat","Tstat_new","ppp","phi","theta","sigR","sigS","sigP","gamma0",
             "Beta","R0","Rmn_pre","Rmn_post","logRdff","Smn_pre","Smn_post",
             "logSdff","Pmn_pre","Pmn_post","logPdff","R","S","N","Pmax","P",
-            "n0","D","SzDst","ynew") # "zeta",
+            "n0","D","SzDst","ynew") # 
   fitmodel = c("Urchsize_fit3.stan")
   mod <- cmdstan_model(fitmodel)   # compiles model (if necessary)
   suppressMessages(                # Suppress messages/warnings (if desired)
